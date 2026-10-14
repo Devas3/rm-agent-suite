@@ -1,0 +1,53 @@
+[project]
+name = "rm-agent"
+version = "0.1.0"
+description = "Relationship Manager Intelligence Platform"
+readme = "README.md"
+authors = [
+    { name = "Devas3", email = "devas@nousinfo.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "psycopg2-binary>=2.9",
+    "persist-queue>=1.0.0",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "faker>=30.0",
+    "numpy>=2.0",
+    "confluent-kafka>=2.15.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pymongo>=4.9",
+    "python-jose[cryptography]>=3.3",
+    "passlib[bcrypt]>=1.7",
+    "groq>=0.11.0",
+    "agno>=3.0.7",
+    "arize-phoenix>=20.9.0",
+    "arize-phoenix-otel>=0.17.1",
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
+    "openinference-instrumentation-groq>=0.1.25",
+    "openinference-instrumentation-agno>=1.0.8",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "ruff>=0.7", "mypy>=1.13", "pre-commit>=4.0"]
+
+[project.scripts]
+rm-agent = "rm_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+strict = true
+disallow_untyped_defs = true
