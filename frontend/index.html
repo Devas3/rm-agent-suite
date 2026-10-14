@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RM Intelligence & Copilot Platform</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- React & ReactDOM CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel Standalone for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const API_BASE = "http://localhost:8000";
+
+    function App() {
+      const [rmIdInput, setRmIdInput] = useState("");
+      const [token, setToken] = useState(localStorage.getItem("rm_token") || "");
+      const [currentRm, setCurrentRm] = useState(JSON.parse(localStorage.getItem("rm_user") || "null"));
+      const [digest, setDigest] = useState(null);
+      const [selectedClient, setSelectedClient] = useState(null);
+      const [activeTab, setActiveTab] = useState("briefing"); // "briefing" or "copilot"
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState("");
+
+      // Copilot state
+      const [copilotQuery, setCopilotQuery] = useState("");
+      const [copilotHistory, setCopilotHistory] = useState([
+        {
+          role: "assistant",
+          content: "Hello! I am your RM Copilot. Ask me to prepare meeting briefs, analyze accounts, or surface expansion opportunities (e.g. 'Prepare me for my meeting with ABC Manufacturing tomorrow')."
+        }
+      ]);
+      const [copilotLoading, setCopilotLoading] = useState(false);
+      const chatEndRef = useRef(null);
+
+      useEffect(() => {
+        if (chatEndRef.current) {
+          chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+        }
+      }, [copilotHistory, copilotLoading]);
+
+
+      useEffect(() => {
+        if (token && currentRm) {
+          fetchBriefing(token);
+        }
+      }, [token, currentRm]);
+
+      useEffect(() => {
+        if (window.lucide) {
+          window.lucide.createIcons();
+        }
+      });
+
+      const handleLogin = async () => {
+        const id = rmIdInput.trim();
+        if (!id) {
+          setError("Please enter your RM ID.");
+          return;
+        }
+        setLoading(true);
+        setError("");
+        try {
+          const res = await fetch(`${API_BASE}/api/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rm_id: id })
+          });
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.detail || "RM ID not recognised. Please check and try again.");
+          }
+          const data = await res.json();
+          setToken(data.access_token);
+          setCurrentRm(data);
+          localStorage.setItem("rm_token", data.access_token);
+          localStorage.setItem("rm_user", JSON.stringify(data));
+          await fetchBriefing(data.access_token);
+        } catch (err) {
+          setError(err.message || "Login error");
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleLogout = () => {
+        setToken("");
+        setCurrentRm(null);
+        setDigest(null);
+        setSelectedClient(null);
+        localStorage.removeItem("rm_token");
+        localStorage.removeItem("rm_user");
+      };
+
+      const fetchBriefing = async (authToken) => {
+        setLoading(true);
+        setError("");
+        try {
+          const res = await fetch(`${API_BASE}/api/briefing/latest`, {
+            headers: { Authorization: `Bearer ${authToken}` }
+          });
+          if (!res.ok) {
+            if (res.status === 404) {
+              setError("No daily briefing found for this RM. Please trigger the daily briefing flow.");
+              setDigest(null);
+              return;
+            }
+            throw new Error("Failed to load briefing");
+          }
+          const data = await res.json();
+          setDigest(data);
+          if (data.flagged_relationships && data.flagged_relationships.length > 0) {
+            setSelectedClient(data.flagged_relationships[0]);
+          }
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const sendCopilotMessage = async (queryOverride) => {
+        const q = (queryOverride !== undefined ? queryOverride : copilotQuery).trim();
+        if (!q || !token) return;
+        setCopilotQuery("");
+        setCopilotHistory(prev => [...prev, { role: "user", content: q }]);
+        setCopilotLoading(true);
+        try {
+          const res = await fetch(`${API_BASE}/api/copilot/chat`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify({ query: q })
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            const detail = data?.detail || `HTTP ${res.status}`;
+            setCopilotHistory(prev => [...prev, { role: "assistant", content: `Copilot error: ${detail}` }]);
+          } else {
+            setCopilotHistory(prev => [...prev, { role: "assistant", content: data.response || "(No response returned)" }]);
+          }
+        } catch (err) {
+          setCopilotHistory(prev => [...prev, { role: "assistant", content: `Error contacting Copilot service: ${err.message}` }]);
+        } finally {
+          setCopilotLoading(false);
+        }
+      };
+
+      if (!token || !currentRm) {
+        return (
+          <div className="min-h-screen flex items-center justify-center p-6">
+            <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full border border-slate-100">
+              <div className="flex items-center space-x-3 mb-6">
+                <div className="bg-blue-600 text-white p-2.5 rounded-xl">
+                  <i data-lucide="shield-alert" className="w-6 h-6"></i>
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold text-slate-800">Commercial RM Portal</h1>
+                  <p className="text-xs text-slate-500">Kinective Intelligence Platform</p>
+                </div>
+              </div>
+
+              {error && (
+                <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-200">
+                  {error}
+                </div>
+              )}
+
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Employee / RM ID
+              </label>
+              <p className="text-xs text-slate-400 mb-1">Enter your assigned Relationship Manager ID to access your briefing.</p>
+              <p className="text-xs text-blue-500 mb-3 font-mono">
+                💡 Demo IDs: <strong>RM-001</strong> · <strong>RM-002</strong>
+              </p>
+              <input
+                type="text"
+                value={rmIdInput}
+                onChange={(e) => setRmIdInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                placeholder="e.g. RM-001"
+                autoFocus
+                className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-sm mb-6 focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+
+              <button
+                onClick={handleLogin}
+                disabled={loading}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg text-sm shadow transition duration-150 flex items-center justify-center space-x-2"
+              >
+                <span>{loading ? "Authenticating..." : "Access Daily Briefing"}</span>
+                <i data-lucide="arrow-right" className="w-4 h-4"></i>
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          {/* Top Navbar */}
+          <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-30">
+            <div className="flex items-center space-x-4">
+              <div className="bg-blue-600 text-white p-2 rounded-lg">
+                <i data-lucide="activity" className="w-5 h-5"></i>
+              </div>
+              <div>
+                <h1 className="text-lg font-bold text-slate-900 leading-tight">RM Intelligence Platform</h1>
+                <p className="text-xs text-slate-500">Commercial Banking Relationship Suite</p>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-4">
+              {/* Tab navigation */}
+              <div className="bg-slate-100 p-1 rounded-lg flex space-x-1">
+                <button
+                  onClick={() => setActiveTab("briefing")}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition ${activeTab === "briefing" ? "bg-white text-blue-600 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                >
+                  Morning Briefing
+                </button>
+                <button
+                  onClick={() => setActiveTab("copilot")}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition ${activeTab === "copilot" ? "bg-white text-blue-600 shadow-sm" : "text-slate-600 hover:text-slate-900"}`}
+                >
+                  RM Copilot
+                </button>
+              </div>
+
+              {/* Logged-in RM Identity — read-only, no switching */}
+              <div className="flex items-center space-x-2 bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5">
+                <i data-lucide="user-circle" className="w-4 h-4 text-blue-600"></i>
+                <div className="text-xs leading-tight">
+                  <div className="font-semibold text-slate-800">{currentRm.name}</div>
+                  <div className="text-slate-500">{currentRm.rm_id}</div>
+                </div>
+              </div>
+
+              <button
+                onClick={handleLogout}
+                title="Sign out"
+                className="text-xs text-slate-500 hover:text-red-600 flex items-center space-x-1"
+              >
+                <i data-lucide="log-out" className="w-4 h-4"></i>
+              </button>
+            </div>
+          </header>
+
+          {/* Main Content Area */}
+          <main className="flex-1 max-w-7xl w-full mx-auto p-6">
+            {error && (
+              <div className="mb-6 p-4 bg-amber-50 text-amber-800 text-sm rounded-xl border border-amber-200 flex items-center justify-between">
+                <span>{error}</span>
+                <button onClick={() => fetchBriefing(token)} className="underline font-semibold">Retry</button>
+              </div>
+            )}
+
+            {activeTab === "briefing" && (
+              <div className="space-y-6">
+                {/* Executive Headline Banner */}
+                {digest ? (
+                  <div className="bg-gradient-to-r from-blue-900 to-indigo-900 text-white rounded-2xl p-6 shadow-lg">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <div className="inline-flex items-center space-x-2 bg-blue-500/20 px-3 py-1 rounded-full text-xs font-semibold text-blue-200 mb-2 border border-blue-400/30">
+                          <i data-lucide="bell" className="w-3.5 h-3.5"></i>
+                          <span>Today's Executive Digest</span>
+                        </div>
+                        <h2 className="text-xl md:text-2xl font-bold tracking-tight mb-2">
+                          {digest.summary_headline}
+                        </h2>
+                        <p className="text-sm text-blue-200">
+                          Generated via real-time stream aggregation & commercial risk models.
+                        </p>
+                      </div>
+                      <div className="text-right hidden sm:block">
+                        <div className="text-3xl font-extrabold text-white">
+                          ${(digest.total_deposits_at_risk / 1000).toLocaleString()}k
+                        </div>
+                        <div className="text-xs text-blue-200">Total Deposits at Risk</div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center">
+                    <p className="text-slate-500 text-sm">Loading today's briefing...</p>
+                  </div>
+                )}
+
+                {/* Two Column Layout: Relationship List + Detail Drilldown */}
+                {digest && (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    {/* Left Column: Flagged Relationships */}
+                    <div className="lg:col-span-5 space-y-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">
+                          Attention Required ({digest.flagged_relationships?.length || 0})
+                        </h3>
+                        <span className="text-xs text-slate-500 font-medium">Sorted by Risk</span>
+                      </div>
+
+                      {digest.flagged_relationships?.map((rel) => {
+                        const isSelected = selectedClient?.client_id === rel.client_id;
+                        return (
+                          <div
+                            key={rel.client_id}
+                            onClick={() => setSelectedClient(rel)}
+                            className={`cursor-pointer p-4 rounded-xl border transition-all duration-150 ${
+                              isSelected
+                                ? "bg-white border-blue-600 shadow-md ring-1 ring-blue-500"
+                                : "bg-white border-slate-200 hover:border-slate-300"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between mb-1.5">
+                              <h4 className="font-semibold text-slate-900 text-sm">{rel.client_name}</h4>
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                rel.risk_level === "HIGH"
+                                  ? "bg-red-100 text-red-700"
+                                  : rel.risk_level === "MEDIUM"
+                                  ? "bg-amber-100 text-amber-700"
+                                  : "bg-slate-100 text-slate-700"
+                              }`}>
+                                {rel.risk_level} RISK
+                              </span>
+                            </div>
+                            <div className="text-xs text-slate-500 mb-2">
+                              Operating: ${rel.operating_balance?.toLocaleString()} &bull; At Risk: ${Math.round(rel.deposits_at_risk)?.toLocaleString()}
+                            </div>
+                            <p className="text-xs text-slate-700 line-clamp-2 italic">
+                              "{rel.agent_conclusion}"
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Right Column: Reasoning & Recommended Action Drilldown */}
+                    <div className="lg:col-span-7">
+                      {selectedClient ? (
+                        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6 sticky top-24">
+                          {/* Client Header */}
+                          <div className="border-b border-slate-100 pb-4 flex items-start justify-between">
+                            <div>
+                              <div className="text-xs font-semibold uppercase text-blue-600 tracking-wider">
+                                Detailed Diagnostic
+                              </div>
+                              <h3 className="text-2xl font-bold text-slate-900">{selectedClient.client_name}</h3>
+                              <p className="text-xs text-slate-500 mt-0.5">ID: {selectedClient.client_id}</p>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-xs font-bold text-slate-400 uppercase">Composite Score</span>
+                              <div className="text-2xl font-black text-slate-800">{selectedClient.risk_score}</div>
+                            </div>
+                          </div>
+
+                          {/* Underlying Signals Grid */}
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+                              Underlying Signals & Activity
+                            </h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {selectedClient.signals?.map((sig, idx) => (
+                                <div key={idx} className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs font-semibold text-slate-800">{sig.name}</span>
+                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                      sig.severity === "HIGH" ? "bg-red-100 text-red-700" : "bg-slate-200 text-slate-700"
+                                    }`}>
+                                      {sig.metric_value}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-slate-600 leading-relaxed">{sig.description}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Agent Conclusion */}
+                          <div className="bg-slate-50 border-l-4 border-amber-500 p-4 rounded-r-xl">
+                            <div className="text-xs font-bold uppercase text-amber-800 mb-1 flex items-center space-x-1.5">
+                              <i data-lucide="zap" className="w-3.5 h-3.5"></i>
+                              <span>Agent Conclusion</span>
+                            </div>
+                            <p className="text-sm font-medium text-slate-800">
+                              {selectedClient.agent_conclusion}
+                            </p>
+                          </div>
+
+                          {/* Recommended Action */}
+                          <div className="bg-blue-50 border-l-4 border-blue-600 p-4 rounded-r-xl">
+                            <div className="text-xs font-bold uppercase text-blue-800 mb-1 flex items-center space-x-1.5">
+                              <i data-lucide="check-circle" className="w-3.5 h-3.5"></i>
+                              <span>Recommended Action</span>
+                            </div>
+                            <p className="text-sm text-blue-900 leading-relaxed font-medium">
+                              {selectedClient.recommended_action}
+                            </p>
+                          </div>
+
+                          {/* Opportunities */}
+                          {selectedClient.opportunities?.length > 0 && (
+                            <div>
+                              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                                Strategic Cross-Sell & Retention
+                              </h4>
+                              <div className="flex flex-wrap gap-2">
+                                {selectedClient.opportunities.map((opp, i) => (
+                                  <span key={i} className="bg-slate-100 text-slate-700 text-xs px-2.5 py-1 rounded-md font-medium border border-slate-200">
+                                    + {opp}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-400">
+                          Select a relationship to inspect signals and AI recommendations.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Conversational RM Copilot Tab */}
+            {activeTab === "copilot" && (
+              <div className="max-w-4xl mx-auto bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col h-[75vh]">
+                <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+                  <div className="flex items-center space-x-3">
+                    <div className="bg-indigo-600 text-white p-2 rounded-lg">
+                      <i data-lucide="bot" className="w-5 h-5"></i>
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-900">RM Conversational Copilot</h3>
+                      <p className="text-xs text-slate-500">Live intelligence, pre-call briefs, and ad-hoc queries</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => sendCopilotMessage("Prepare me for my meeting with Burns-Rodriguez tomorrow.")}
+                    className="text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-3 py-1.5 rounded-lg font-medium border border-indigo-200"
+                  >
+                    Quick Prompt: Pre-call Brief
+                  </button>
+                </div>
+
+                {/* Message Log */}
+                <div className="flex-1 p-6 overflow-y-auto space-y-4">
+                  {copilotHistory.map((msg, i) => (
+                    <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                      <div className={`max-w-2xl p-4 rounded-2xl text-sm leading-relaxed ${
+                        msg.role === "user"
+                          ? "bg-blue-600 text-white rounded-br-none"
+                          : "bg-slate-100 text-slate-800 rounded-bl-none whitespace-pre-wrap"
+                      }`}>
+                        {msg.content}
+                      </div>
+                    </div>
+                  ))}
+                  {copilotLoading && (
+                    <div className="flex justify-start">
+                      <div className="bg-slate-100 text-slate-500 text-xs p-3 rounded-2xl flex items-center space-x-2">
+                        <span>Copilot is analyzing metrics and synthesizing brief...</span>
+                      </div>
+                    </div>
+                  )}
+                  <div ref={chatEndRef} />
+                </div>
+
+                {/* Input Bar */}
+                <div className="p-4 border-t border-slate-200 flex space-x-3">
+                  <input
+                    type="text"
+                    value={copilotQuery}
+                    onChange={(e) => setCopilotQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && sendCopilotMessage()}
+                    placeholder="Ask Copilot (e.g. 'Prepare me for my meeting with ABC Manufacturing tomorrow')..."
+                    className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <button
+                    onClick={sendCopilotMessage}
+                    disabled={copilotLoading || !copilotQuery.trim()}
+                    className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition"
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />, document.getElementById("root"));
+  </script>
+</body>
+</html>
