@@ -3,3 +3,9 @@
 __pycache__/
 verify_env.py
 purge_all_data.py
+
+ca.pem
+demo.mp4
+flow.png
+
+.env
