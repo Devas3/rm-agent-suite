@@ -1,0 +1,4 @@
+.venv/*
+
+verify_env.py
+purge_all_data.py
